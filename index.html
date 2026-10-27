@@ -1,0 +1,875 @@
+<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="description" content="ממיר תוכנית אדריכלית (PDF או תמונה) לקובצי DXF בשכבות של AutoSTRAP, לכל קומה. העיבוד בדפדפן בלבד."><style>html,body{margin:0}img{max-width:100%}[hidden]{display:none!important}:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}</style></head><body><title>תוכנית לסטרפ</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Hebrew:wght@400;500;700&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script async src="https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js"></script>
+<style>
+/* Layout: a drafting-table workbench. Floors rail on the side, one large
+   drawing sheet, a step strip above it and a tool panel beside it. */
+:root {
+  --paper: #f3f5f2; --sheet: #ffffff; --ink: #1d2422; --muted: #66716d; --rule: #d6dcd8;
+  --accent: #3b50c4;      /* cobalt: approved geometry, primary actions */
+  --wall: #c0392b;        /* detected wall centerline */
+  --col: #1f7a4d;         /* approved column */
+  --warn: #b26a00;        /* needs attention */
+  --cal: #8e44ad;         /* calibration points */
+  --chip: #eef1ee;
+  --font-ui: "IBM Plex Sans Hebrew", "Arial Hebrew", "Segoe UI", sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #161b1a; --sheet: #1d2322; --ink: #e4e9e6; --muted: #98a29e; --rule: #2c3533;
+  --accent: #8b9cff; --wall: #ff7b6b; --col: #4cc28a; --warn: #f0a640; --cal: #c48ee6; --chip: #252c2b; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --paper: #161b1a; --sheet: #1d2322; --ink: #e4e9e6; --muted: #98a29e; --rule: #2c3533;
+  --accent: #8b9cff; --wall: #ff7b6b; --col: #4cc28a; --warn: #f0a640; --cal: #c48ee6; --chip: #252c2b; color-scheme: dark }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }  /* overlays (busy, empty, hint) must never catch clicks when hidden */
+body { background: var(--paper); color: var(--ink); font-family: var(--font-ui); font-size: 15px; line-height: 1.5; direction: rtl;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 14px 28px; }
+header { max-width: 1320px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: end; justify-content: space-between;
+  border-bottom: 1px solid var(--rule); padding-bottom: 12px; }
+h1 { margin: 0; font-size: 1.45rem; text-wrap: balance; }
+.sub { margin: 2px 0 0; color: var(--muted); max-width: 70ch; font-size: 14px; }
+.engine { font-size: 13px; color: var(--muted); font-family: var(--font-data); }
+.engine.ok { color: var(--col); }
+main { max-width: 1320px; margin: 14px auto 0; display: grid; grid-template-columns: 210px minmax(0, 1fr) 300px; gap: 16px; }
+@media (max-width: 1000px) { main { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--sheet); border: 1px solid var(--rule); border-radius: 4px; padding: 12px 14px; min-width: 0; }
+.panel h2 { font-size: 13px; color: var(--muted); font-weight: 500; letter-spacing: .03em; margin: 0 0 8px; }
+.stack { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.floor { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 4px;
+  cursor: pointer; background: var(--sheet); text-align: right; font: inherit; color: inherit; width: 100%; }
+.floor[aria-current="true"] { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.floor b { font-weight: 600; }
+.floor .el { font-family: var(--font-data); font-size: 12px; color: var(--muted); }
+.floor .stt { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+.floor .stt.done { color: var(--col); }
+.btn { font: inherit; font-size: 14px; padding: 6px 12px; border-radius: 4px; border: 1px solid var(--rule); background: var(--sheet); color: var(--ink); cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--sheet); }
+.btn[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn:focus-visible, .floor:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.steps { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; margin-bottom: 10px; background: var(--sheet); }
+.steps button { flex: 1 1 auto; font: inherit; font-size: 14px; border: 0; border-inline-start: 1px solid var(--rule); background: transparent; color: var(--muted); padding: 7px 10px; cursor: pointer; }
+.steps button:first-child { border-inline-start: 0; }
+.steps button[aria-current="true"] { background: var(--ink); color: var(--paper); }
+.steps button:disabled { cursor: not-allowed; opacity: .5; }
+.sheetwrap { background: var(--sheet); border: 1px solid var(--rule); border-radius: 4px; position: relative; overflow: hidden; min-width: 0; }
+canvas#view { display: block; width: 100%; height: 66vh; min-height: 380px; touch-action: none; cursor: grab; }
+canvas#view.pick { cursor: crosshair; }
+.hint { position: absolute; inset-inline: 10px; top: 10px; background: var(--sheet); border: 1px solid var(--rule); border-radius: 4px;
+  padding: 6px 10px; font-size: 14px; }
+.zoom { position: absolute; bottom: 10px; inset-inline-start: 10px; display: flex; gap: 6px; direction: ltr; }
+.zoom .btn { padding: 2px 10px; font-family: var(--font-data); }
+.busy { position: absolute; inset: 0; display: grid; place-items: center; background: color-mix(in srgb, var(--sheet) 82%, transparent); font-size: 15px; }
+.empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; color: var(--muted); }
+.empty div { max-width: 46ch; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+label.f { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--muted); }
+input[type="number"], input[type="text"] { font: inherit; font-size: 14px; padding: 5px 8px; border: 1px solid var(--rule); border-radius: 4px; background: var(--sheet); color: var(--ink); width: 100%; }
+input.num { direction: ltr; font-family: var(--font-data); }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stat b { display: block; font-family: var(--font-data); font-size: 1.35rem; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 12px; color: var(--muted); }
+.note { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+.warn { font-size: 13px; color: var(--warn); margin: 6px 0 0; }
+.status { font-size: 13px; color: var(--muted); min-height: 1.4em; margin: 6px 0 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; direction: ltr; }
+.chip { font-family: var(--font-data); font-size: 12px; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--rule); background: var(--chip); color: var(--muted); cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--sheet); }
+details summary { cursor: pointer; font-size: 14px; }
+textarea { width: 100%; height: 90px; font-family: var(--font-data); font-size: 11px; direction: ltr; background: var(--paper); color: var(--ink); border: 1px solid var(--rule); border-radius: 4px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); padding: 6px 10px; border-top: 1px solid var(--rule); }
+.sw { display: inline-block; width: 16px; height: 0; border-top: 2px solid; vertical-align: middle; margin-inline-end: 5px; }
+.sq { display: inline-block; width: 9px; height: 9px; vertical-align: middle; margin-inline-end: 5px; }
+.legal { max-width: 1320px; margin: 16px auto 0; font-size: 12px; color: var(--muted); }
+</style>
+
+<header>
+  <div>
+    <h1>תוכנית לסטרפ</h1>
+    <p class="sub">מעלים תוכנית אדריכלית לכל קומה, מכיילים בשתי נקודות, בודקים את הקירות והעמודים, ומורידים קובצי DXF בשכבות של AutoSTRAP. התוכנית מעובדת בדפדפן שלך ולא נשלחת לשום מקום.</p>
+  </div>
+  <div class="engine" id="engine" role="status">טוען מנוע זיהוי…</div>
+</header>
+
+<main>
+  <aside class="stack">
+    <div class="panel">
+      <h2>קומות</h2>
+      <div class="stack" id="floors"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="bAddFloor" type="button">הוסף קומה</button>
+        <button class="btn" id="bSample" type="button">טען דוגמה</button>
+      </div>
+      <p class="note">את אותן שתי נקודות מסמנים בכל הקומות, כדי שהקומות ייושרו זו על זו.</p>
+    </div>
+    <div class="panel">
+      <h2>הקומה הנבחרת</h2>
+      <div class="stack">
+        <label class="f">שם<input type="text" id="fName"></label>
+        <label class="f">מפלס רצפה (מ')<input type="number" id="fElev" class="num" step="0.01"></label>
+      </div>
+    </div>
+  </aside>
+
+  <section style="min-width:0">
+    <nav class="steps" aria-label="שלבים">
+      <button type="button" id="st1" data-step="1">1. העלאה</button>
+      <button type="button" id="st2" data-step="2">2. כיול</button>
+      <button type="button" id="st3" data-step="3">3. בדיקה ועריכה</button>
+      <button type="button" id="st4" data-step="4">4. הורדה</button>
+    </nav>
+    <div class="sheetwrap">
+      <canvas id="view" aria-label="התוכנית"></canvas>
+      <div class="hint" id="hint" hidden></div>
+      <div class="empty" id="empty">
+        <div>
+          <b>אין עדיין תוכנית בקומה הזו</b>
+          <span>PDF, PNG או JPG. עדיף שרטוט ישר וברור. אפשר גם לטעון את הדוגמה כדי לראות איך זה עובד.</span>
+          <label class="btn primary" for="file" style="cursor:pointer">בחר קובץ</label>
+          <input type="file" id="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/*" hidden>
+        </div>
+      </div>
+      <div class="busy" id="busy" hidden></div>
+      <div class="zoom"><button class="btn" id="zIn" type="button" aria-label="הגדל">+</button><button class="btn" id="zOut" type="button" aria-label="הקטן">−</button><button class="btn" id="zFit" type="button">התאם</button></div>
+    </div>
+    <div class="legend">
+      <span><i class="sw" style="border-color:var(--wall)"></i>קיר שזוהה</span>
+      <span><i class="sq" style="background:var(--col)"></i>עמוד</span>
+      <span><i class="sw" style="border-color:var(--accent);border-top-style:dashed"></i>קו רשת</span>
+      <span><i class="sq" style="background:var(--cal)"></i>נקודות כיול</span>
+    </div>
+  </section>
+
+  <aside class="stack" id="tools"></aside>
+</main>
+<p class="legal">הכלי מכין גיאומטריה בלבד. ההחלטה אילו קירות ועמודים נושאים, העומסים והאחריות ההנדסית הם של המהנדס. העבודה נשמרת רק בזמן שהדף פתוח. תוכנית הדוגמה: Swiss Dwellings, Archilyse AG, רישיון CC BY 4.0 (DOI 10.5281/zenodo.7070952).</p>
+
+<script>
+// Geometry and scoring. Mirrors apply_grid.py and measure.py so the screen
+// and the Python pipeline produce the same columns from the same decisions.
+function segDist(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1, L2 = dx * dx + dy * dy;
+  let t = L2 ? ((px - x1) * dx + (py - y1) * dy) / L2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const qx = x1 + t * dx - px, qy = y1 + t * dy - py;
+  return Math.sqrt(qx * qx + qy * qy);
+}
+function inPoly(px, py, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+function inOutline(px, py, poly, buf) {
+  if (inPoly(px, py, poly)) return true;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++)
+    if (segDist(px, py, poly[j][0], poly[j][1], poly[i][0], poly[i][1]) <= buf) return true;
+  return false;
+}
+function nearWall(px, py, walls, d) {
+  for (const w of walls) {
+    if (Math.min(w[0], w[2]) - d > px || Math.max(w[0], w[2]) + d < px) continue;
+    if (Math.min(w[1], w[3]) - d > py || Math.max(w[1], w[3]) + d < py) continue;
+    if (segDist(px, py, w[0], w[1], w[2], w[3]) <= d) return true;
+  }
+  return false;
+}
+// all column positions that the approved lines would create (before exclusions)
+function intersections(plan, xs, ys) {
+  const out = [];
+  for (const x of xs) for (const y of ys)
+    if (inOutline(x, y, plan.contour, 0.3) && nearWall(x, y, plan.walls, plan.near)) out.push([x, y]);
+  return out;
+}
+// greedy one-to-one matching within tol metres, same as measure.py
+function score(sug, truth, tol = 0.6) {
+  const pairs = [];
+  sug.forEach((s, i) => truth.forEach((t, j) => {
+    const d = Math.hypot(s[0] - t[0], s[1] - t[1]);
+    if (d <= tol) pairs.push([d, i, j]);
+  }));
+  pairs.sort((a, b) => a[0] - b[0]);
+  const us = new Set(), ut = new Set();
+  for (const [, i, j] of pairs) if (!us.has(i) && !ut.has(j)) { us.add(i); ut.add(j); }
+  return { found: ut.size, real: truth.length, suggested: sug.length, wrong: sug.length - us.size, hitS: us, hitT: ut };
+}
+// Snap a clicked position to the nearest row of aligned walls (like Revit
+// "Pick Lines"). weak = every wall alignment, even short ones. Within tol
+// metres it snaps; otherwise the click position is kept.
+function snapPos(pos, weak, tol = 1.0) {
+  let best = null, bd = tol;
+  for (const w of weak) { const d = Math.abs(w - pos); if (d <= bd) { bd = d; best = w; } }
+  return best === null ? { pos: Math.round(pos * 100) / 100, snapped: false } : { pos: best, snapped: true };
+}
+// Name for an added line: the line before it plus ".1", ".2" ... (C.1 between C and D)
+function addedId(lines, pos, axis) {
+  const before = lines.filter((l) => !l.added && l.pos < pos).sort((a, b) => b.pos - a.pos)[0];
+  const base = before ? before.id : (axis === "x" ? "A" : "1") + "-";
+  let n = 1;
+  while (lines.some((l) => l.id === `${base}.${n}`)) n++;
+  return `${base}.${n}`;
+}
+
+// Wall and column detector for the browser (and node, for tests).
+// A line-by-line translation of detect_walls_image.py; parameters must stay equal.
+// Needs an initialised opencv.js object `cv`.
+(function (root) {
+  const P = {
+    MAX_WALL: 0.40,   // m, widest double-line wall to fill
+    MIN_INK: 0.04,    // m, thinner ink is not a wall
+    MIN_PIECE: 0.60,  // m, smaller blobs are text/ticks
+    END_EXT: 0.20,    // m added to each segment end
+    COL_MIN: 0.12, COL_MAX: 0.80, COL_FILL: 0.85,
+  };
+
+  // numpy-style rounding (half to even), so pixel sampling matches Python exactly
+  function rint(x) { const f = Math.floor(x), d = x - f; if (d > 0.5) return f + 1; if (d < 0.5) return f; return f % 2 === 0 ? f : f + 1; }
+
+  // similarity transform pixel -> metres from two points (y axis flips); same as calib() in Python
+  function calib(refPx, refWorld) {
+    const p = refPx.map(([x, y]) => [x, -y]);
+    const w = refWorld;
+    const dp = [p[1][0] - p[0][0], p[1][1] - p[0][1]], dw = [w[1][0] - w[0][0], w[1][1] - w[0][1]];
+    const s = Math.hypot(dw[0], dw[1]) / Math.hypot(dp[0], dp[1]);
+    const a = Math.atan2(dw[1], dw[0]) - Math.atan2(dp[1], dp[0]);
+    const R = [[s * Math.cos(a), -s * Math.sin(a)], [s * Math.sin(a), s * Math.cos(a)]];
+    const t = [w[0][0] - (R[0][0] * p[0][0] + R[0][1] * p[0][1]), w[0][1] - (R[1][0] * p[0][0] + R[1][1] * p[0][1])];
+    const f = (x, y) => { y = -y; return [R[0][0] * x + R[0][1] * y + t[0], R[1][0] * x + R[1][1] * y + t[1]]; };
+    return { toM: f, mpp: s, rotDeg: a * 180 / Math.PI };
+  }
+
+  // Zhang-Suen thinning on a 0/1 Uint8Array (same family as skimage skeletonize, 2D default)
+  function thin(img, W, H) {
+    const a = img; let fg = [];
+    for (let i = 0; i < a.length; i++) if (a[i]) fg.push(i);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let pass = 0; pass < 2; pass++) {
+        const del = [];
+        for (const i of fg) {
+          if (!a[i]) continue;
+          const x = i % W, y = (i / W) | 0;
+          if (x === 0 || y === 0 || x === W - 1 || y === H - 1) continue;
+          const p2 = a[i - W], p3 = a[i - W + 1], p4 = a[i + 1], p5 = a[i + W + 1],
+                p6 = a[i + W], p7 = a[i + W - 1], p8 = a[i - 1], p9 = a[i - W - 1];
+          const B = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9;
+          if (B < 2 || B > 6) continue;
+          const A = (!p2 && p3) + (!p3 && p4) + (!p4 && p5) + (!p5 && p6) + (!p6 && p7) + (!p7 && p8) + (!p8 && p9) + (!p9 && p2);
+          if (A !== 1) continue;
+          if (pass === 0 ? (p2 * p4 * p6 === 0 && p4 * p6 * p8 === 0) : (p2 * p4 * p8 === 0 && p2 * p6 * p8 === 0)) del.push(i);
+        }
+        if (del.length) { changed = true; for (const i of del) a[i] = 0; }
+      }
+      fg = fg.filter((i) => a[i]);
+    }
+    return a;
+  }
+
+  // merge Hough pieces on one line that overlap or nearly touch (pixels); same as merge_segments()
+  function mergeSegments(segs, angTol = 1.5, offTol = 4.0, gap = 8.0) {
+    const items = segs.map(([x1, y1, x2, y2]) => [((Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI) % 180 + 180) % 180, [x1, y1], [x2, y2]]);
+    items.sort((u, v) => u[0] - v[0]);
+    const groups = [];
+    for (const [a, p, q] of items) {
+      const th = a * Math.PI / 180, d = [Math.cos(th), Math.sin(th)], n = [-d[1], d[0]];
+      const off = p[0] * n[0] + p[1] * n[1];
+      const tp = p[0] * d[0] + p[1] * d[1], tq = q[0] * d[0] + q[1] * d[1];
+      const t1 = Math.min(tp, tq), t2 = Math.max(tp, tq);
+      let merged = false;
+      for (const g of groups) {
+        const da = Math.min(Math.abs(g.a - a), 180 - Math.abs(g.a - a));
+        if (da <= angTol && Math.abs(g.off - off) <= offTol && t1 <= g.t2 + gap && t2 >= g.t1 - gap &&
+            Math.abs(g.a * Math.PI / 180 - th) < angTol * Math.PI / 180 + 1e-9) {
+          g.t1 = Math.min(g.t1, t1); g.t2 = Math.max(g.t2, t2); merged = true; break;
+        }
+      }
+      if (!merged) groups.push({ a, off, t1, t2 });
+    }
+    return groups.map((g) => {
+      const th = g.a * Math.PI / 180, d = [Math.cos(th), Math.sin(th)], n = [-d[1], d[0]];
+      return [[n[0] * g.off + d[0] * g.t1, n[1] * g.off + d[1] * g.t1], [n[0] * g.off + d[0] * g.t2, n[1] * g.off + d[1] * g.t2]];
+    });
+  }
+
+  // gray: cv.Mat CV_8UC1. cal: result of calib(). Returns plan in metres.
+  function detectFloor(cv, gray, cal, onStep = () => {}) {
+    const mpp = cal.mpp, ppm = 1 / mpp, W = gray.cols, H = gray.rows;
+    const mats = [];
+    const keep = (m) => (mats.push(m), m);
+    try {
+      onStep("סף שחור-לבן");
+      const ink = keep(new cv.Mat());
+      cv.threshold(gray, ink, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+
+      onStep("מילוי קירות כפולים");
+      const cnts = keep(new cv.MatVector()), hier = keep(new cv.Mat());
+      cv.findContours(ink, cnts, hier, cv.RETR_CCOMP, cv.CHAIN_APPROX_SIMPLE);
+      const filled = keep(ink.clone());
+      const hd = hier.data32S;
+      for (let i = 0; i < cnts.size(); i++) {
+        if (hd[i * 4 + 3] < 0) continue;            // not a hole
+        const c = cnts.get(i), r = cv.boundingRect(c), area = cv.contourArea(c);
+        if (Math.min(r.width, r.height) > 3 * P.MAX_WALL * ppm && area > (P.MAX_WALL * ppm) ** 2 * 50) { c.delete(); continue; }
+        const hole = cv.Mat.zeros(r.height + 2, r.width + 2, cv.CV_8U), dist = new cv.Mat();
+        cv.drawContours(hole, cnts, i, new cv.Scalar(255), -1, cv.LINE_8, new cv.Mat(), 0, new cv.Point(-r.x + 1, -r.y + 1));
+        cv.distanceTransform(hole, dist, cv.DIST_L2, 3);
+        const width = 2 * cv.minMaxLoc(dist).maxVal;
+        if (width <= P.MAX_WALL * ppm) cv.drawContours(filled, cnts, i, new cv.Scalar(255), -1);
+        hole.delete(); dist.delete(); c.delete();
+      }
+
+      onStep("ניקוי טקסט וקווים דקים");
+      const k = Math.max(2, rint(P.MIN_INK * ppm));
+      const kern = keep(cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(k, k)));
+      const m = keep(new cv.Mat()), raw = keep(new cv.Mat());
+      cv.morphologyEx(filled, m, cv.MORPH_OPEN, kern);
+      cv.morphologyEx(ink, raw, cv.MORPH_OPEN, kern);
+
+      onStep("חיפוש עמודים");
+      const lab2 = keep(new cv.Mat()), st2 = keep(new cv.Mat()), cen2 = keep(new cv.Mat());
+      const n2 = cv.connectedComponentsWithStats(raw, lab2, st2, cen2, 8, cv.CV_32S);
+      const L2 = lab2.data32S, S2 = st2.data32S, C2 = cen2.data64F, md = m.data;
+      const colsPx = [];
+      for (let i = 1; i < n2; i++) {
+        const x = S2[i * 5], y = S2[i * 5 + 1], w = S2[i * 5 + 2], h = S2[i * 5 + 3], a = S2[i * 5 + 4];
+        if (Math.max(w, h) / ppm > P.COL_MAX || Math.min(w, h) / ppm < 0.05) continue;
+        const pts = [];
+        for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++) if (L2[yy * W + xx] === i) pts.push(xx - x, yy - y);
+        const pm = cv.matFromArray(pts.length / 2, 1, cv.CV_32FC2, pts);
+        const rr = cv.minAreaRect(pm); pm.delete();
+        const rw = rr.size.width, rh = rr.size.height, lo = Math.min(rw, rh) / ppm, hi = Math.max(rw, rh) / ppm;
+        if (lo >= P.COL_MIN && hi / Math.max(lo, 1e-9) < 2.5 && a / Math.max(rw * rh, 1) >= P.COL_FILL) {
+          colsPx.push([C2[i * 2], C2[i * 2 + 1], rw, rh]);
+          for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++) if (L2[yy * W + xx] === i) md[yy * W + xx] = 0;
+        }
+      }
+
+      onStep("הסרת שאריות קטנות");
+      const lab = keep(new cv.Mat()), st = keep(new cv.Mat()), cen = keep(new cv.Mat());
+      const n = cv.connectedComponentsWithStats(m, lab, st, cen, 8, cv.CV_32S);
+      const big = new Uint8Array(n), S = st.data32S, L = lab.data32S;
+      for (let i = 1; i < n; i++) big[i] = Math.max(S[i * 5 + 2], S[i * 5 + 3]) >= P.MIN_PIECE * ppm ? 1 : 0;
+      const mask = keep(new cv.Mat(H, W, cv.CV_8U)), mk = mask.data, bin = new Uint8Array(W * H);
+      for (let p = 0; p < W * H; p++) { const v = big[L[p]]; mk[p] = v ? 255 : 0; bin[p] = v; }
+
+      onStep("שלד של הקירות");
+      thin(bin, W, H);
+      const skel = keep(new cv.Mat(H, W, cv.CV_8U)); const sk = skel.data;
+      for (let p = 0; p < W * H; p++) sk[p] = bin[p] ? 255 : 0;
+
+      onStep("זיהוי קטעים ישרים");
+      const lines = keep(new cv.Mat());
+      cv.HoughLinesP(skel, lines, 1, Math.PI / 720, Math.trunc(0.25 * ppm), Math.trunc(0.4 * ppm), Math.trunc(0.12 * ppm));
+      const segs = []; const ld = lines.data32S;
+      for (let i = 0; i + 3 < ld.length; i += 4) segs.push([ld[i], ld[i + 1], ld[i + 2], ld[i + 3]]);
+      const merged = mergeSegments(segs);
+
+      onStep("עובי קירות");
+      const dist = keep(new cv.Mat());
+      cv.distanceTransform(mask, dist, cv.DIST_L2, 5);
+      const dd = dist.data32F;
+      const walls = [];
+      for (let [a, b] of merged) {
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        const cnt = Math.max(2, Math.trunc(len / 5));
+        const vals = [];
+        for (let j = 0; j < cnt; j++) {
+          const t = cnt === 1 ? 0 : j / (cnt - 1);
+          const px = Math.min(Math.max(rint(a[0] + t * (b[0] - a[0])), 0), W - 1);
+          const py = Math.min(Math.max(rint(a[1] + t * (b[1] - a[1])), 0), H - 1);
+          vals.push(dd[py * W + px]);
+        }
+        vals.sort((u, v) => u - v);
+        const med = vals.length % 2 ? vals[(vals.length - 1) / 2] : (vals[vals.length / 2 - 1] + vals[vals.length / 2]) / 2;
+        const thick = 2 * med * mpp;
+        const u = [(b[0] - a[0]) / Math.max(len, 1e-9), (b[1] - a[1]) / Math.max(len, 1e-9)];
+        a = [a[0] - u[0] * P.END_EXT * ppm, a[1] - u[1] * P.END_EXT * ppm];
+        b = [b[0] + u[0] * P.END_EXT * ppm, b[1] + u[1] * P.END_EXT * ppm];
+        const A = cal.toM(a[0], a[1]), B = cal.toM(b[0], b[1]);
+        walls.push({ start: A.map((v) => Math.round(v * 1000) / 1000), end: B.map((v) => Math.round(v * 1000) / 1000), thickness: Math.round(thick * 1000) / 1000 });
+      }
+
+      onStep("מתאר הבניין");
+      const kk = Math.trunc(1.2 * ppm);
+      const bigk = keep(cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(kk, kk)));
+      const closed = keep(new cv.Mat());
+      cv.morphologyEx(mask, closed, cv.MORPH_CLOSE, bigk);
+      const oc = keep(new cv.MatVector()), oh = keep(new cv.Mat());
+      cv.findContours(closed, oc, oh, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+      let best = -1, bestA = -1;
+      for (let i = 0; i < oc.size(); i++) { const c = oc.get(i), ar = cv.contourArea(c); if (ar > bestA) { bestA = ar; best = i; } c.delete(); }
+      let contour = [];
+      if (best >= 0) {
+        const c = oc.get(best), ap = new cv.Mat();
+        cv.approxPolyDP(c, ap, 0.1 * ppm, true);
+        const d = ap.data32S;
+        for (let i = 0; i + 1 < d.length; i += 2) contour.push(cal.toM(d[i], d[i + 1]).map((v) => Math.round(v * 1000) / 1000));
+        c.delete(); ap.delete();
+      }
+
+      const columns_suggested = colsPx.map(([cx, cy, w, h]) => ({
+        center: cal.toM(cx, cy).map((v) => Math.round(v * 1000) / 1000),
+        size: [Math.round(w * mpp * 1000) / 1000, Math.round(h * mpp * 1000) / 1000], why: "free-standing blob" }));
+      return { units: "m", contour, walls, columns_suggested, columns: [], beams: [],
+               calibration: { metres_per_px: mpp, rotation_deg: cal.rotDeg },
+               stats: { hough_segments: segs.length, walls: walls.length } };
+    } finally {
+      for (const x of mats) { try { x.delete(); } catch (e) {} }
+    }
+  }
+
+  const api = { P, calib, detectFloor, mergeSegments, thin };
+  if (typeof module !== "undefined") module.exports = api; else root.PlanDetect = api;
+})(typeof window !== "undefined" ? window : globalThis);
+
+// DXF writer (R12 / AC1009 ASCII, the most widely readable version).
+// Same layers as plan_to_dxf.py so AutoSTRAP layer assignment is identical.
+(function (root) {
+  const LAYERS = [["S-SLAB-CONTOUR", 4], ["S-WALLS", 1], ["S-COLUMNS", 3], ["S-BEAMS", 5], ["S-COLUMNS-SUGGESTED", 6]];
+  const f = (v) => (Math.round(v * 10000) / 10000).toString();
+
+  function toDXF(plan) {
+    const o = [];
+    const g = (code, val) => { o.push(String(code)); o.push(String(val)); };
+    // $INSUNITS 6 = metres (AutoSTRAP also asks "1 STRAP = x DXF units" on import)
+    g(0, "SECTION"); g(2, "HEADER"); g(9, "$ACADVER"); g(1, "AC1009"); g(9, "$INSUNITS"); g(70, 6); g(0, "ENDSEC");
+    g(0, "SECTION"); g(2, "TABLES");
+    g(0, "TABLE"); g(2, "LAYER"); g(70, LAYERS.length);
+    for (const [name, color] of LAYERS) { g(0, "LAYER"); g(2, name); g(70, 0); g(62, color); g(6, "CONTINUOUS"); }
+    g(0, "ENDTAB"); g(0, "ENDSEC");
+    g(0, "SECTION"); g(2, "ENTITIES");
+    const line = (layer, a, b) => { g(0, "LINE"); g(8, layer); g(10, f(a[0])); g(20, f(a[1])); g(30, 0); g(11, f(b[0])); g(21, f(b[1])); g(31, 0); };
+    const poly = (layer, pts) => {
+      g(0, "POLYLINE"); g(8, layer); g(66, 1); g(10, 0); g(20, 0); g(30, 0); g(70, 1);
+      for (const p of pts) { g(0, "VERTEX"); g(8, layer); g(10, f(p[0])); g(20, f(p[1])); g(30, 0); }
+      g(0, "SEQEND"); g(8, layer);
+    };
+    const rect = (c) => { const [x, y] = c.center, hx = c.size[0] / 2, hy = c.size[1] / 2; return [[x - hx, y - hy], [x + hx, y - hy], [x + hx, y + hy], [x - hx, y + hy]]; };
+    if (plan.contour && plan.contour.length >= 3) poly("S-SLAB-CONTOUR", plan.contour);
+    for (const w of plan.walls || []) line("S-WALLS", w.start, w.end);
+    for (const c of plan.columns || []) poly("S-COLUMNS", rect(c));
+    for (const c of plan.columns_suggested || []) poly("S-COLUMNS-SUGGESTED", rect(c));
+    for (const b of plan.beams || []) line("S-BEAMS", b.start, b.end);
+    g(0, "ENDSEC"); g(0, "EOF");
+    return o.join("\r\n") + "\r\n";
+  }
+  const api = { toDXF, LAYERS };
+  if (typeof module !== "undefined") module.exports = api; else root.PlanDXF = api;
+})(typeof window !== "undefined" ? window : globalThis);
+
+// Minimal ZIP writer (stored, no compression) with CRC-32. Enough for a few DXF files.
+(function (root) {
+  const T = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; T[n] = c >>> 0; }
+  const crc32 = (u8) => { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = T[(c ^ u8[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+  function makeZip(files) {           // files: [{name, text}]
+    const enc = new TextEncoder(), parts = [], central = []; let offset = 0;
+    for (const f of files) {
+      const name = enc.encode(f.name), data = enc.encode(f.text), crc = crc32(data);
+      const h = new DataView(new ArrayBuffer(30));
+      h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(8, 0, true);
+      h.setUint16(10, 0, true); h.setUint16(12, 0x21, true); h.setUint32(14, crc, true);
+      h.setUint32(18, data.length, true); h.setUint32(22, data.length, true); h.setUint16(26, name.length, true); h.setUint16(28, 0, true);
+      parts.push(new Uint8Array(h.buffer), name, data);
+      const c = new DataView(new ArrayBuffer(46));
+      c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true);
+      c.setUint16(10, 0, true); c.setUint16(12, 0, true); c.setUint16(14, 0x21, true); c.setUint32(16, crc, true);
+      c.setUint32(20, data.length, true); c.setUint32(24, data.length, true); c.setUint16(28, name.length, true);
+      c.setUint32(42, offset, true);
+      central.push(new Uint8Array(c.buffer), name);
+      offset += 30 + name.length + data.length;
+    }
+    const csize = central.reduce((s, p) => s + p.length, 0);
+    const e = new DataView(new ArrayBuffer(22));
+    e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
+    e.setUint32(12, csize, true); e.setUint32(16, offset, true);
+    const all = [...parts, ...central, new Uint8Array(e.buffer)];
+    const out = new Uint8Array(all.reduce((s, p) => s + p.length, 0)); let o = 0;
+    for (const p of all) { out.set(p, o); o += p.length; }
+    return out;
+  }
+  const api = { makeZip, crc32 };
+  if (typeof module !== "undefined") module.exports = api; else root.PlanZip = api;
+})(typeof window !== "undefined" ? window : globalThis);
+
+const SAMPLE = {"name": "Swiss Dwellings, building 2383, floor 11230 (Archilyse AG, CC BY 4.0)", "png": "data:image/png;base64,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", "A": [152.8, 418.0], "B": [835.1, 157.3], "dist": 14.609, "columns_truth": 8};
+
+// ---------- state ----------
+const S = { floors: [], cur: 0, step: 1, mode: null, view: { s: 1, tx: 0, ty: 0 }, cv: null, sel: null, pending: null };
+const $ = (id) => document.getElementById(id);
+const fl = () => S.floors[S.cur];
+let uid = 1;
+function newFloor(i) {
+  return { id: uid++, name: i === 0 ? "קומת קרקע" : `קומה ${i}`, elev: +(i * 3).toFixed(2), canvas: null, file: "",
+           A: null, B: null, dist: null, walls: [], cols: [], contour: [], detected: false, gridOn: { x: new Set(), y: new Set() }, grid: null };
+}
+S.floors.push(newFloor(0));
+
+// ---------- engine (opencv.js) ----------
+(function waitCv() {
+  const cv = window.cv;
+  if (cv && cv.Mat && typeof cv.HoughLinesP === "function") { S.cv = cv; $("engine").textContent = "מנוע הזיהוי מוכן"; $("engine").classList.add("ok"); renderTools(); return; }
+  setTimeout(waitCv, 200);
+})();
+if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+
+// ---------- geometry helpers ----------
+const MAXPPM = 100, MINPPM = 40;
+function worldFromCal(f) {                       // A -> (0,0), B -> (dist, 0)
+  return PlanDetect.calib([f.A, f.B], [[0, 0], [f.dist, 0]]);
+}
+function invCal(f) {                             // metres -> image pixels
+  const A = f.A, B = f.B, dpx = Math.hypot(B[0] - A[0], B[1] - A[1]), s = f.dist / dpx;
+  const ang = Math.atan2(-(B[1] - A[1]), B[0] - A[0]);       // image angle of AB (y up)
+  return (x, y) => { const u = x / s, v = y / s, c = Math.cos(ang), sn = Math.sin(ang);
+    const X = u * c - v * sn, Y = u * sn + v * c; return [A[0] + X, A[1] - Y]; };
+}
+function gridLines(walls, axis, minLen) {        // same as suggest_columns.grid_lines
+  const tol = 2 * Math.PI / 180, pos = [];
+  for (const w of walls) {
+    const [x1, y1] = w.start, [x2, y2] = w.end;
+    let a = Math.atan2(y2 - y1, x2 - x1) % Math.PI; if (a < 0) a += Math.PI;
+    const L = Math.hypot(x2 - x1, y2 - y1);
+    const vert = Math.abs(a - Math.PI / 2) < tol, hor = a < tol || a > Math.PI - tol;
+    if (axis === 0 && vert) pos.push([(x1 + x2) / 2, L]);
+    if (axis === 1 && hor) pos.push([(y1 + y2) / 2, L]);
+  }
+  pos.sort((u, v) => u[0] - v[0]);
+  const cl = [];
+  for (const [p, L] of pos) { const c = cl[cl.length - 1]; if (c && p - c.last <= 0.4) { c.sum += p * L; c.len += L; c.last = p; } else cl.push({ sum: p * L, len: L, last: p }); }
+  return cl.filter((c) => c.len >= minLen).map((c) => ({ pos: Math.round(c.sum / c.len * 1000) / 1000, len: Math.round(c.len * 10) / 10 }));
+}
+
+// ---------- view ----------
+const cvs = $("view"), ctx = cvs.getContext("2d");
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function fit() {
+  const f = fl(); if (!f.canvas) return;
+  const r = cvs.getBoundingClientRect(), s = Math.min(r.width / f.canvas.width, r.height / f.canvas.height) * 0.95;
+  S.view = { s, tx: (r.width - f.canvas.width * s) / 2, ty: (r.height - f.canvas.height * s) / 2 }; draw();
+}
+const toScr = (p) => [p[0] * S.view.s + S.view.tx, p[1] * S.view.s + S.view.ty];
+const toImg = (x, y) => [(x - S.view.tx) / S.view.s, (y - S.view.ty) / S.view.s];
+function draw() {
+  const dpr = window.devicePixelRatio || 1, r = cvs.getBoundingClientRect();
+  if (cvs.width !== Math.round(r.width * dpr)) { cvs.width = Math.round(r.width * dpr); cvs.height = Math.round(r.height * dpr); }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, r.width, r.height);
+  const f = fl(); $("empty").hidden = !!f.canvas;
+  if (!f.canvas) return;
+  ctx.save(); ctx.translate(S.view.tx, S.view.ty); ctx.scale(S.view.s, S.view.s);
+  ctx.globalAlpha = f.detected && S.step >= 3 ? 0.35 : 1; ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(f.canvas, 0, 0); ctx.restore(); ctx.globalAlpha = 1;
+  if (f.A && f.B && f.dist && f.detected && S.step >= 3) {
+    const P = invCal(f);
+    if (f.grid) {
+      ctx.setLineDash([6, 4]); ctx.strokeStyle = css("--accent"); ctx.lineWidth = 1;
+      const ext = 200;
+      for (const l of f.grid.x) if (f.gridOn.x.has(l.pos)) { const a = toScr(P(l.pos, -ext)), b = toScr(P(l.pos, ext)); ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke(); }
+      for (const l of f.grid.y) if (f.gridOn.y.has(l.pos)) { const a = toScr(P(-ext, l.pos)), b = toScr(P(ext, l.pos)); ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke(); }
+      ctx.setLineDash([]);
+    }
+    ctx.lineWidth = 2;
+    f.walls.forEach((w, i) => {
+      const a = toScr(P(...w.start)), b = toScr(P(...w.end));
+      ctx.strokeStyle = S.sel === i ? css("--accent") : css("--wall"); ctx.lineWidth = S.sel === i ? 4 : 2;
+      ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
+    });
+    ctx.fillStyle = css("--col");
+    for (const c of f.cols) {
+      const p = toScr(P(...c.center)), h = Math.max(4, (c.size[0] / f.dist) * Math.hypot(f.B[0] - f.A[0], f.B[1] - f.A[1]) * S.view.s / 2);
+      ctx.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h);
+    }
+    if (S.pending) { const a = toScr(P(...S.pending)); ctx.fillStyle = css("--accent"); ctx.beginPath(); ctx.arc(...a, 5, 0, 7); ctx.fill(); }
+  }
+  for (const [k, p] of [["A", f.A], ["B", f.B]]) if (p) {
+    const q = toScr(p); ctx.fillStyle = css("--cal"); ctx.beginPath(); ctx.arc(q[0], q[1], 7, 0, 7); ctx.fill();
+    ctx.fillStyle = css("--sheet"); ctx.font = "bold 10px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(k, q[0], q[1] + 0.5);
+  }
+  if (f.A && f.B) { const a = toScr(f.A), b = toScr(f.B); ctx.strokeStyle = css("--cal"); ctx.setLineDash([4, 3]); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke(); ctx.setLineDash([]); }
+}
+window.addEventListener("resize", () => { draw(); });
+
+// pan / zoom
+let drag = null;
+cvs.addEventListener("pointerdown", (e) => { drag = { x: e.clientX, y: e.clientY, tx: S.view.tx, ty: S.view.ty, moved: false }; cvs.setPointerCapture(e.pointerId); });
+cvs.addEventListener("pointermove", (e) => { if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true; if (drag.moved) { S.view.tx = drag.tx + dx; S.view.ty = drag.ty + dy; draw(); } });
+cvs.addEventListener("pointerup", (e) => { const d = drag; drag = null; if (d && !d.moved) click(e); });
+cvs.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.offsetX, e.offsetY, e.deltaY < 0 ? 1.2 : 1 / 1.2); }, { passive: false });
+function zoomAt(x, y, k) { S.view.tx = x - (x - S.view.tx) * k; S.view.ty = y - (y - S.view.ty) * k; S.view.s *= k; draw(); }
+$("zIn").onclick = () => { const r = cvs.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1.3); };
+$("zOut").onclick = () => { const r = cvs.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1 / 1.3); };
+$("zFit").onclick = fit;
+
+function click(e) {
+  const f = fl(); if (!f.canvas) return;
+  const r = cvs.getBoundingClientRect(), ip = toImg(e.clientX - r.left, e.clientY - r.top);
+  if (S.mode === "A" || S.mode === "B") {
+    f[S.mode] = ip.map((v) => Math.round(v * 10) / 10);
+    S.mode = S.mode === "A" && !f.B ? "B" : null; f.detected = false; renderAll(); return;
+  }
+  if (!f.detected || S.step !== 3) return;
+  const W = worldFromCal(f), w = W.toM(ip[0], ip[1]);
+  const mPerScreenPx = f.dist / Math.hypot(f.B[0] - f.A[0], f.B[1] - f.A[1]) / S.view.s;
+  if (S.mode === "addCol") { f.cols.push({ center: w.map((v) => Math.round(v * 1000) / 1000), size: [colSize(), colSize()], src: "manual" }); status(`נוסף עמוד ב-(${w[0].toFixed(2)}, ${w[1].toFixed(2)})`); renderAll(); return; }
+  if (S.mode === "addWall") {
+    if (!S.pending) { S.pending = w; status("לחץ על קצה הקיר השני"); draw(); return; }
+    f.walls.push({ start: S.pending.map((v) => Math.round(v * 1000) / 1000), end: w.map((v) => Math.round(v * 1000) / 1000), thickness: 0.2, src: "manual" });
+    S.pending = null;
+    const nw = f.walls[f.walls.length - 1], P2 = f.contour.length >= 3 ? f.contour : null;
+    const inside = (q) => !P2 || inPoly(q[0], q[1], P2) || P2.some((v, i) => segDist(q[0], q[1], v[0], v[1], P2[(i + 1) % P2.length][0], P2[(i + 1) % P2.length][1]) <= 0.3);
+    status(inside(nw.start) && inside(nw.end) ? "נוסף קיר" : "נוסף קיר, אבל הוא יוצא ממתאר הבניין. בדוק שזה מכוון.");
+    renderAll(); return;
+  }
+  // default: select nearest column (remove) or wall (select)
+  const ci = f.cols.findIndex((c) => Math.hypot(c.center[0] - w[0], c.center[1] - w[1]) < Math.max(0.3, 8 * mPerScreenPx));
+  if (ci >= 0 && S.mode === "edit") { f.cols.splice(ci, 1); status("העמוד הוסר"); renderAll(); return; }
+  let best = -1, bd = 10 * mPerScreenPx;
+  f.walls.forEach((wl, i) => { const d = segDist(w[0], w[1], wl.start[0], wl.start[1], wl.end[0], wl.end[1]); if (d < bd) { bd = d; best = i; } });
+  S.sel = best >= 0 ? best : null; renderTools(); draw();
+}
+const colSize = () => { const v = parseFloat(($("colSize") || {}).value); return isFinite(v) && v > 0 ? v : 0.3; };
+function status(t) { S.msg = t; const s = $("tStatus"); if (s) s.textContent = t; }
+
+// ---------- upload ----------
+$("file").addEventListener("change", async (e) => {
+  const file = e.target.files[0]; e.target.value = ""; if (!file) return;
+  busy("קורא את הקובץ…");
+  try {
+    const canvas = /pdf$/i.test(file.name) || file.type === "application/pdf" ? await pdfToCanvas(file) : await imgToCanvas(file);
+    const f = fl(); Object.assign(f, { canvas, file: file.name, A: null, B: null, detected: false, walls: [], cols: [], grid: null });
+    if (S.cur > 0 && S.floors[0].dist) f.dist = S.floors[0].dist;
+    S.step = 2; S.mode = "A"; busy(null); renderAll(); fit();
+  } catch (err) { busy(null); alertMsg("לא הצלחתי לקרוא את הקובץ: " + (err && err.message ? err.message : err)); }
+});
+function imgToCanvas(file) {
+  return new Promise((res, rej) => { const url = URL.createObjectURL(file), im = new Image();
+    im.onload = () => { const c = document.createElement("canvas"); c.width = im.naturalWidth; c.height = im.naturalHeight;
+      const x = c.getContext("2d"); x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height); x.drawImage(im, 0, 0); URL.revokeObjectURL(url); res(c); };
+    im.onerror = () => rej(new Error("קובץ תמונה לא תקין")); im.src = url; });
+}
+async function pdfToCanvas(file) {
+  if (!window.pdfjsLib) throw new Error("קורא ה-PDF לא נטען");
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const page = await pdf.getPage(1), v1 = page.getViewport({ scale: 1 });
+  const scale = Math.min(6000 / Math.max(v1.width, v1.height), 300 / 72);
+  const vp = page.getViewport({ scale }), c = document.createElement("canvas"); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+  const x = c.getContext("2d"); x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height);
+  await page.render({ canvasContext: x, viewport: vp }).promise; return c;
+}
+function busy(t) { $("busy").hidden = !t; $("busy").textContent = t || ""; }
+function alertMsg(t) { status(t); const h = $("hint"); h.hidden = false; h.textContent = t; setTimeout(() => { h.hidden = true; }, 6000); }
+
+// ---------- detection ----------
+async function runDetect() {
+  const f = fl();
+  if (!S.cv) { alertMsg("מנוע הזיהוי עוד נטען, נסה שוב בעוד רגע"); return; }
+  if (!(f.A && f.B && f.dist > 0)) return;
+  const pxLen = Math.hypot(f.B[0] - f.A[0], f.B[1] - f.A[1]), ppm = pxLen / f.dist;
+  // work at <= 100 px per metre (the resolution everything was measured at)
+  const k = ppm > MAXPPM ? MAXPPM / ppm : 1;
+  const W = Math.round(f.canvas.width * k), H = Math.round(f.canvas.height * k);
+  const work = document.createElement("canvas"); work.width = W; work.height = H;
+  const wx = work.getContext("2d"); wx.imageSmoothingQuality = "high"; wx.drawImage(f.canvas, 0, 0, W, H);
+  busy("מזהה קירות ועמודים… (כ-15 שניות לתוכנית גדולה)");
+  await new Promise((r) => setTimeout(r, 60));
+  const cv = S.cv;
+  let src, gray;
+  try {
+    src = cv.matFromImageData(wx.getImageData(0, 0, W, H)); gray = new cv.Mat();
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    const cal = PlanDetect.calib([[f.A[0] * k, f.A[1] * k], [f.B[0] * k, f.B[1] * k]], [[0, 0], [f.dist, 0]]);
+    const t0 = performance.now();
+    const plan = PlanDetect.detectFloor(cv, gray, cal);
+    f.walls = plan.walls; f.contour = plan.contour;
+    f.cols = plan.columns_suggested.map((c) => ({ center: c.center, size: c.size, src: "auto" }));
+    f.detected = true; f.lowRes = ppm < MINPPM;
+    f.grid = { x: gridLines(f.walls, 0, 10), y: gridLines(f.walls, 1, 10) };
+    f.gridOn = { x: new Set(), y: new Set() };
+    f.secs = ((performance.now() - t0) / 1000).toFixed(1);
+    S.step = 3; S.mode = "edit";
+  } catch (err) { alertMsg("הזיהוי נכשל: " + (err && err.message ? err.message : err)); }
+  finally { if (src) src.delete(); if (gray) gray.delete(); busy(null); renderAll(); }
+}
+
+// ---------- grid ----------
+function gridColumns() {
+  const f = fl(), xs = [...f.gridOn.x], ys = [...f.gridOn.y];
+  const plan = { contour: f.contour, walls: f.walls.map((w) => [w.start[0], w.start[1], w.end[0], w.end[1]]), near: 0.3 };
+  let added = 0;
+  for (const p of intersections(plan, xs, ys)) {
+    if (f.cols.some((c) => Math.hypot(c.center[0] - p[0], c.center[1] - p[1]) < 0.3)) continue;
+    f.cols.push({ center: p.map((v) => Math.round(v * 1000) / 1000), size: [colSize(), colSize()], src: "grid" }); added++;
+  }
+  status(`נוספו ${added} עמודים במפגשי הקווים`); renderAll();
+}
+
+// ---------- export ----------
+function floorPlan(f) {
+  return { contour: f.contour, walls: f.walls.map((w) => ({ start: w.start, end: w.end, thickness: w.thickness })),
+           columns: f.cols.map((c) => ({ center: c.center, size: c.size })), columns_suggested: [], beams: [] };
+}
+const fileName = (f, i) => `floor-${String(i + 1).padStart(2, "0")}_${f.elev >= 0 ? "+" : ""}${(+f.elev).toFixed(2)}m.dxf`;
+function readme() {
+  const lines = ["תוכנית לסטרפ - קובצי DXF לייבוא ב-AutoSTRAP", "",
+    "יחידות: מטרים. כל קומה בקובץ נפרד, כל הקומות באותה מערכת צירים (נקודה A = 0,0).", "",
+    "שכבות:", "  S-WALLS        קווי מרכז של קירות", "  S-COLUMNS      עמודים (מלבנים סגורים)",
+    "  S-SLAB-CONTOUR מתאר התקרה", "  S-BEAMS        (ריק בגרסה זו)", "",
+    "קומות:"];
+  S.floors.forEach((f, i) => { if (f.detected) lines.push(`  ${fileName(f, i)}  ${f.name}, מפלס ${(+f.elev).toFixed(2)} מ', קירות ${f.walls.length}, עמודים ${f.cols.length}`); });
+  lines.push("", "הגיאומטריה הוכנה אוטומטית ונבדקה על ידי המשתמש. ההחלטות ההנדסיות והאחריות הן של המהנדס.");
+  return lines.join("\r\n") + "\r\n";
+}
+async function download() {
+  const files = S.floors.map((f, i) => f.detected ? { name: fileName(f, i), text: PlanDXF.toDXF(floorPlan(f)) } : null).filter(Boolean);
+  if (!files.length) return;
+  files.push({ name: "README.txt", text: readme() });
+  const zip = PlanZip.makeZip(files);
+  $("dxfText").value = files[0].text.slice(0, 4000);
+  if (!(window.claude && window.claude.use)) {
+    // ordinary website (not inside Claude): a normal browser download
+    const url = URL.createObjectURL(new Blob([zip], { type: "application/zip" }));
+    const a = document.createElement("a"); a.href = url; a.download = "plan-to-strap.zip";
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+    $("dlStatus").textContent = `הקובץ ירד: ${files.length - 1} קומות ו-README.`; return;
+  }
+  const dl = await window.claude.use("downloads");
+  if (!dl) { $("dlStatus").textContent = "ההורדה לא זמינה בתצוגה הזו. אפשר להעתיק את תוכן הקובץ מהתיבה."; $("copyBox").hidden = false; return; }
+  try { await dl.save({ filename: "plan-to-strap.zip", data: new Blob([zip]) }); $("dlStatus").textContent = `הקובץ נשמר: ${files.length - 1} קומות ו-README.`; }
+  catch (err) {
+    const c = err && err.code;
+    $("dlStatus").textContent = c === "declined" ? "ההורדה בוטלה." : c === "rate_limited" ? "חלון הורדה כבר פתוח, נסה שוב בעוד רגע." : "ההורדה לא זמינה כאן. אפשר להעתיק את תוכן הקובץ מהתיבה.";
+    if (c !== "declined" && c !== "rate_limited") $("copyBox").hidden = false;
+  }
+}
+
+// ---------- sample ----------
+$("bSample").addEventListener("click", () => {
+  const im = new Image();
+  im.onload = () => {
+    const c = document.createElement("canvas"); c.width = im.naturalWidth; c.height = im.naturalHeight;
+    const x = c.getContext("2d"); x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height); x.drawImage(im, 0, 0);
+    const f = fl(); Object.assign(f, { canvas: c, file: "דוגמה: " + SAMPLE.name, A: SAMPLE.A.slice(), B: SAMPLE.B.slice(), dist: SAMPLE.dist, detected: false, walls: [], cols: [], grid: null });
+    S.step = 2; S.mode = null; renderAll(); fit();
+  };
+  im.src = SAMPLE.png;
+});
+
+// ---------- panels ----------
+function renderFloors() {
+  const host = $("floors"); host.textContent = "";
+  S.floors.forEach((f, i) => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "floor"; b.setAttribute("aria-current", i === S.cur);
+    const st = !f.canvas ? "לא הועלתה תוכנית" : !f.dist ? "ממתין לכיול" : !f.detected ? "מוכן לזיהוי" : `${f.walls.length} קירות · ${f.cols.length} עמודים`;
+    b.innerHTML = `<b></b><span class="el"></span><span class="stt ${f.detected ? "done" : ""}"></span>`;
+    b.children[0].textContent = f.name; b.children[1].textContent = `${(+f.elev).toFixed(2)}+`; b.children[2].textContent = st;
+    b.onclick = () => { S.cur = i; S.sel = null; S.pending = null; S.mode = null; S.msg = ""; S.step = !f.canvas ? 1 : !f.detected ? 2 : 3; renderAll(); fit(); };
+    host.appendChild(b);
+  });
+  $("fName").value = fl().name; $("fElev").value = fl().elev;
+}
+$("fName").addEventListener("input", (e) => { fl().name = e.target.value; renderFloors(); });
+$("fElev").addEventListener("input", (e) => { const v = parseFloat(e.target.value); if (isFinite(v)) { fl().elev = v; renderFloors(); } });
+$("bAddFloor").addEventListener("click", () => { S.floors.push(newFloor(S.floors.length)); S.cur = S.floors.length - 1; S.step = 1; renderAll(); });
+document.querySelectorAll(".steps button").forEach((b) => b.addEventListener("click", () => { S.step = +b.dataset.step; S.mode = null; S.pending = null; renderAll(); }));
+
+function renderSteps() {
+  const f = fl(), can = { 1: true, 2: !!f.canvas, 3: f.detected, 4: S.floors.some((x) => x.detected) };
+  document.querySelectorAll(".steps button").forEach((b) => { const n = +b.dataset.step; b.disabled = !can[n]; b.setAttribute("aria-current", n === S.step); });
+  cvs.classList.toggle("pick", ["A", "B", "addCol", "addWall"].includes(S.mode));
+  const h = $("hint");
+  const msg = S.mode === "A" ? "לחץ על נקודה A: פינה של קיר חיצוני ארוך." : S.mode === "B" ? "לחץ על נקודה B: הפינה השנייה של אותו קיר." :
+    S.mode === "addCol" ? "לחץ במקום שבו יש עמוד." : S.mode === "addWall" ? "לחץ על שני קצוות הקיר." : "";
+  h.hidden = !msg; h.textContent = msg;
+}
+
+function renderTools() {
+  const t = $("tools"), f = fl(); t.textContent = "";
+  const panel = (title, html) => { const d = document.createElement("div"); d.className = "panel"; d.innerHTML = `<h2>${title}</h2>` + html; t.appendChild(d); return d; };
+  if (S.step === 1) {
+    panel("1. העלאה", `<p class="note">בחר את התוכנית של הקומה הזו. PDF נקרא מהעמוד הראשון.</p>
+      <div class="row" style="margin-top:8px"><label class="btn primary" for="file" style="cursor:pointer">בחר קובץ</label></div>
+      ${f.file ? `<p class="note">קובץ: <span id="fn"></span></p>` : ""}`);
+    if ($("fn")) $("fn").textContent = f.file;
+  }
+  if (S.step === 2) {
+    const first = S.cur === 0 || !S.floors[0].dist;
+    const p = panel("2. כיול", `
+      <p class="note">${first ? "סמן שתי פינות של קיר חיצוני ארוך, וכתוב את המרחק ביניהן. הכיוון של הקיר הזה יהיה ציר x." :
+        "סמן את אותן שתי נקודות שסימנת בקומה הראשונה. המרחק נלקח משם."}</p>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" id="bA" type="button" aria-pressed="${S.mode === "A"}">נקודה A ${f.A ? "✓" : ""}</button>
+        <button class="btn" id="bB" type="button" aria-pressed="${S.mode === "B"}">נקודה B ${f.B ? "✓" : ""}</button>
+      </div>
+      <label class="f" style="margin-top:10px">המרחק בין A ל-B (מטרים)<input type="number" id="dist" class="num" step="0.01" min="0.5" value="${f.dist || ""}" ${first ? "" : "readonly"}></label>
+      <p class="note" id="ppmNote"></p>
+      <div class="row" style="margin-top:10px"><button class="btn primary" id="bDetect" type="button" ${f.A && f.B && f.dist > 0 && S.cv ? "" : "disabled"}>זהה קירות ועמודים</button></div>
+      ${S.cv ? "" : `<p class="note">מנוע הזיהוי נטען (כ-10 MB בפעם הראשונה).</p>`}`);
+    $("bA").onclick = () => { S.mode = "A"; renderAll(); };
+    $("bB").onclick = () => { S.mode = "B"; renderAll(); };
+    $("dist").oninput = (e) => { const v = parseFloat(e.target.value); f.dist = isFinite(v) && v > 0 ? v : null; f.detected = false; renderFloors(); renderSteps();
+      $("bDetect").disabled = !(f.A && f.B && f.dist > 0 && S.cv); ppm(); };
+    $("bDetect").onclick = runDetect;
+    const ppm = () => { if (f.A && f.B && f.dist) { const v = Math.hypot(f.B[0] - f.A[0], f.B[1] - f.A[1]) / f.dist;
+      $("ppmNote").textContent = `רזולוציה: ${v.toFixed(0)} פיקסלים למטר` + (v < MINPPM ? ". נמוכה מדי לקירות דקים, עדיף סריקה ברזולוציה גבוהה יותר." : "."); } };
+    ppm();
+  }
+  if (S.step === 3 && f.detected) {
+    const len = f.walls.reduce((s, w) => s + Math.hypot(w.end[0] - w.start[0], w.end[1] - w.start[1]), 0);
+    const auto = f.cols.filter((c) => c.src === "auto").length;
+    const p = panel("3. בדיקה ועריכה", `
+      <div class="stats"><div class="stat"><b>${f.walls.length}</b><span>קירות</span></div><div class="stat"><b>${Math.round(len)}</b><span>מטר קיר</span></div><div class="stat"><b>${f.cols.length}</b><span>עמודים</span></div></div>
+      <p class="note">${auto} עמודים זוהו אוטומטית (עמוד שעומד לבד). עמוד שצמוד לקיר לא מזוהה: מוסיפים בלחיצה.</p>
+      ${f.lowRes ? `<p class="warn">רזולוציה נמוכה: קירות דקים עלולים להיחסר.</p>` : ""}
+      <div class="row" style="margin-top:8px">
+        <button class="btn" id="mEdit" type="button" aria-pressed="${S.mode === "edit"}">בחירה ומחיקה</button>
+        <button class="btn" id="mCol" type="button" aria-pressed="${S.mode === "addCol"}">הוסף עמוד</button>
+        <button class="btn" id="mWall" type="button" aria-pressed="${S.mode === "addWall"}">הוסף קיר</button>
+      </div>
+      <label class="f" style="margin-top:8px">צלע עמוד חדש (מ')<input type="number" id="colSize" class="num" step="0.05" min="0.1" value="0.30"></label>
+      ${S.sel !== null && f.walls[S.sel] ? `<div class="row" style="margin-top:8px"><button class="btn" id="bDelWall" type="button">מחק את הקיר המסומן</button></div>` : ""}
+      <p class="status" id="tStatus" role="status"></p>
+      <p class="note">במצב "בחירה ומחיקה": לחיצה על עמוד מוחקת אותו, לחיצה על קיר מסמנת אותו. זיהוי לקח ${f.secs} שניות.</p>`);
+    $("tStatus").textContent = S.msg || "";
+    $("mEdit").onclick = () => { S.mode = "edit"; S.pending = null; S.msg = ""; renderAll(); };
+    $("mCol").onclick = () => { S.mode = "addCol"; S.pending = null; renderAll(); };
+    $("mWall").onclick = () => { S.mode = "addWall"; S.pending = null; renderAll(); };
+    if ($("bDelWall")) $("bDelWall").onclick = () => { f.walls.splice(S.sel, 1); S.sel = null; renderAll(); };
+    const g = panel("קווי רשת (לבניין עם שלד עמודים)", `
+      <p class="note">קווים שבהם קירות עומדים בשורה. מסמנים את קווי הרשת, ויוצרים עמודים במפגשים.</p>
+      <h2 style="margin-top:8px">לאורך (x)</h2><div class="chips" id="gx"></div>
+      <h2 style="margin-top:8px">לרוחב (y)</h2><div class="chips" id="gy"></div>
+      <div class="row" style="margin-top:8px"><button class="btn" id="bGrid" type="button">צור עמודים במפגשים</button></div>`);
+    for (const [ax, host] of [["x", "gx"], ["y", "gy"]]) for (const l of f.grid[ax]) {
+      const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.setAttribute("aria-pressed", f.gridOn[ax].has(l.pos));
+      b.textContent = `${l.pos.toFixed(2)}`; b.title = `${l.len} מ' של קיר על הקו`;
+      b.onclick = () => { f.gridOn[ax].has(l.pos) ? f.gridOn[ax].delete(l.pos) : f.gridOn[ax].add(l.pos); renderAll(); };
+      $(host).appendChild(b);
+    }
+    $("bGrid").onclick = gridColumns;
+  }
+  if (S.step === 4) {
+    const ready = S.floors.filter((x) => x.detected).length;
+    const p = panel("4. הורדה", `
+      <p class="note">${ready} מתוך ${S.floors.length} קומות מוכנות. כל קומה נשמרת כקובץ DXF נפרד, כולן בקובץ ZIP אחד עם README.</p>
+      <div class="row" style="margin-top:8px"><button class="btn primary" id="bDl" type="button" ${ready ? "" : "disabled"}>הורד ZIP</button></div>
+      <p class="status" id="dlStatus" role="status"></p>
+      <div id="copyBox" hidden><p class="note">תוכן הקומה הראשונה (DXF):</p><textarea id="dxfText" readonly></textarea></div>
+      <p class="note">ב-AutoSTRAP: מייבאים כל קומה, משייכים את השכבות S-WALLS, S-COLUMNS ו-S-SLAB-CONTOUR, ומגדירים 1 STRAP = 1 DXF unit (מטרים).</p>`);
+    $("bDl").onclick = download;
+  }
+}
+function renderAll() { renderFloors(); renderSteps(); renderTools(); draw(); }
+renderAll();
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { S.mode = S.step === 3 ? "edit" : null; S.pending = null; renderAll(); }
+  if ((e.key === "Delete" || e.key === "Backspace") && S.sel !== null && S.step === 3 && document.activeElement.tagName !== "INPUT") { fl().walls.splice(S.sel, 1); S.sel = null; renderAll(); } });
+</script>
+</body></html>
